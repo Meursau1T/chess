@@ -1,0 +1,19 @@
+[package]
+name = "chess_tui"
+version = "0.1.0"
+edition = "2024"
+description = "A command-driven Xiangqi TUI with Pikafish support"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+chessai = "1.0.1"
+crossbeam-channel = "0.5"
+crossterm = "0.28.1"
+ratatui = "0.29"
+unicode-width = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
