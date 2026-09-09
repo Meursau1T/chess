@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{AnalysisLine, App, Focus, PositionEvaluation};
@@ -12,6 +12,8 @@ use crate::game::{PositionState, color_name};
 
 const BOARD_WIDTH: u16 = 42;
 const BOARD_HEIGHT: u16 = 14;
+const ARABIC_FILE_LABELS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const CHINESE_FILE_LABELS: [&str; 9] = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -49,6 +51,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 
     render_input(frame, rows[2], app);
+    render_slash_command_menu(frame, rows[2], app);
     frame.render_widget(
         Paragraph::new(app.message.as_str()).style(Style::default().fg(Color::Yellow)),
         rows[3],
@@ -355,6 +358,59 @@ fn render_input(frame: &mut Frame<'_>, area: Rect, app: &App) {
     }
 }
 
+fn render_slash_command_menu(frame: &mut Frame<'_>, input_area: Rect, app: &App) {
+    if app.focus != Focus::Input {
+        return;
+    }
+    let suggestions = app.slash_command_suggestions();
+    if suggestions.is_empty() {
+        return;
+    }
+
+    const MAX_VISIBLE: usize = 7;
+    let selected = app.slash_command_index().min(suggestions.len() - 1);
+    let visible = suggestions.len().min(MAX_VISIBLE);
+    let start = selected.saturating_add(1).saturating_sub(visible);
+    let end = (start + visible).min(suggestions.len());
+    let lines = suggestions[start..end]
+        .iter()
+        .enumerate()
+        .map(|(offset, suggestion)| {
+            let index = start + offset;
+            let marker = if index == selected { "›" } else { " " };
+            let style = if index == selected {
+                Style::default().fg(Color::Black).bg(Color::LightGreen)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::from(format!(
+                "{marker} {}  {}",
+                suggestion.command, suggestion.description
+            ))
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+
+    let width = input_area.width.saturating_sub(2).min(48);
+    let height = visible as u16 + 2;
+    let menu_area = Rect::new(
+        input_area.x.saturating_add(1),
+        input_area.y.saturating_sub(height),
+        width,
+        height,
+    );
+    frame.render_widget(Clear, menu_area);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 命令 · ↑↓ 选择 · Enter 执行 ")
+                .border_style(Style::default().fg(Color::LightGreen)),
+        ),
+        menu_area,
+    );
+}
+
 struct BoardWidget<'a> {
     app: &'a App,
 }
@@ -386,12 +442,17 @@ impl Widget for BoardWidget<'_> {
         let origin_x = inner.x + inner.width.saturating_sub(content_width) / 2;
         let origin_y = inner.y + inner.height.saturating_sub(12) / 2;
 
+        let top_side = if self.app.flipped {
+            SideColor::Red
+        } else {
+            SideColor::Black
+        };
         for display_column in 0..9u8 {
             let x = origin_x + 3 + display_column as u16 * 4;
             buffer.set_string(
                 x,
                 origin_y,
-                (display_column + 1).to_string(),
+                file_label(top_side, display_column + 1),
                 Style::default().fg(Color::DarkGray),
             );
         }
@@ -421,15 +482,28 @@ impl Widget for BoardWidget<'_> {
             }
         }
 
+        let bottom_side = if self.app.flipped {
+            SideColor::Black
+        } else {
+            SideColor::Red
+        };
         for display_column in 0..9u8 {
             let x = origin_x + 3 + display_column as u16 * 4;
             buffer.set_string(
                 x,
                 origin_y + 11,
-                (9 - display_column).to_string(),
+                file_label(bottom_side, 9 - display_column),
                 Style::default().fg(Color::DarkGray),
             );
         }
+    }
+}
+
+fn file_label(side: SideColor, number: u8) -> &'static str {
+    let index = usize::from(number.saturating_sub(1).min(8));
+    match side {
+        SideColor::Red => CHINESE_FILE_LABELS[index],
+        SideColor::Black => ARABIC_FILE_LABELS[index],
     }
 }
 
@@ -608,22 +682,55 @@ mod tests {
     }
 
     #[test]
-    fn board_uses_opposite_numeric_file_labels() {
-        let app = App::new(AppOptions::default());
-        let backend = TestBackend::new(42, 14);
+    fn slash_input_renders_command_menu() {
+        let mut app = App::new(AppOptions::default());
+        app.input = "/".to_string();
+        let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| frame.render_widget(BoardWidget { app: &app }, frame.area()))
-            .unwrap();
-        let cells = terminal.backend().buffer().content();
-        let row_digits = |row: usize| {
-            cells[row * 42..(row + 1) * 42]
-                .iter()
-                .flat_map(|cell| cell.symbol().chars())
-                .filter(char::is_ascii_digit)
-                .collect::<String>()
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let symbols = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(symbols.contains("Enter"));
+        assert!(symbols.contains('难'));
+        assert!(symbols.contains('悔'));
+        assert!(symbols.contains('提'));
+    }
+
+    #[test]
+    fn board_uses_black_arabic_and_red_chinese_file_labels() {
+        let mut app = App::new(AppOptions::default());
+        let render_labels = |app: &App| {
+            let backend = TestBackend::new(42, 14);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(BoardWidget { app }, frame.area()))
+                .unwrap();
+            let cells = terminal.backend().buffer().content();
+            let row_labels = |row: usize| {
+                cells[row * 42..(row + 1) * 42]
+                    .iter()
+                    .flat_map(|cell| cell.symbol().chars())
+                    .filter(|character| {
+                        character.is_ascii_digit() || "一二三四五六七八九".contains(*character)
+                    })
+                    .collect::<String>()
+            };
+            (row_labels(1), row_labels(12))
         };
-        assert_eq!(row_digits(1), "123456789");
-        assert_eq!(row_digits(12), "987654321");
+
+        assert_eq!(
+            render_labels(&app),
+            ("123456789".to_string(), "九八七六五四三二一".to_string())
+        );
+        app.flipped = true;
+        assert_eq!(
+            render_labels(&app),
+            ("一二三四五六七八九".to_string(), "987654321".to_string())
+        );
     }
 }

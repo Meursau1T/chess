@@ -116,6 +116,71 @@ struct ActiveSearch {
     skill_move: Option<Move>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashCommand {
+    pub(crate) command: &'static str,
+    pub(crate) description: &'static str,
+}
+
+const SLASH_COMMANDS: [SlashCommand; 14] = [
+    SlashCommand {
+        command: "/难度",
+        description: "查看或设置 1 到 20 级",
+    },
+    SlashCommand {
+        command: "/悔棋",
+        description: "撤回上一回合",
+    },
+    SlashCommand {
+        command: "/提示",
+        description: "给出推荐走法",
+    },
+    SlashCommand {
+        command: "/新局",
+        description: "开始新对局",
+    },
+    SlashCommand {
+        command: "/分析",
+        description: "进行更深入的分析",
+    },
+    SlashCommand {
+        command: "/停止",
+        description: "停止当前思考",
+    },
+    SlashCommand {
+        command: "/翻转",
+        description: "翻转棋盘",
+    },
+    SlashCommand {
+        command: "/执红",
+        description: "选择执红",
+    },
+    SlashCommand {
+        command: "/执黑",
+        description: "选择执黑",
+    },
+    SlashCommand {
+        command: "/双人",
+        description: "切换双人对弈",
+    },
+    SlashCommand {
+        command: "/中文棋子",
+        description: "使用中文棋子",
+    },
+    SlashCommand {
+        command: "/emoji",
+        description: "使用 Unicode 棋子",
+    },
+    SlashCommand {
+        command: "/帮助",
+        description: "查看帮助",
+    },
+    SlashCommand {
+        command: "/退出",
+        description: "退出程序",
+    },
+];
+
 pub struct AppOptions {
     pub engine_path: Option<PathBuf>,
     pub think_time: Duration,
@@ -155,6 +220,7 @@ pub struct App {
     pub(crate) difficulty: Difficulty,
     input_history: Vec<String>,
     history_index: Option<usize>,
+    slash_command_index: usize,
     ai: AiHandle,
     active_search: Option<ActiveSearch>,
     search_sequence: u64,
@@ -185,6 +251,7 @@ impl App {
             difficulty: options.difficulty,
             input_history: Vec::new(),
             history_index: None,
+            slash_command_index: 0,
             ai: AiHandle::start(options.engine_path),
             active_search: None,
             search_sequence: 0,
@@ -218,7 +285,11 @@ impl App {
     fn handle_event(&mut self, event: Event) {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
-            Event::Paste(text) if self.focus == Focus::Input => self.input.push_str(&text),
+            Event::Paste(text) if self.focus == Focus::Input => {
+                self.input.push_str(&text);
+                self.history_index = None;
+                self.slash_command_index = 0;
+            }
             _ => {}
         }
     }
@@ -248,10 +319,18 @@ impl App {
             KeyCode::Backspace => {
                 self.input.pop();
                 self.history_index = None;
+                self.slash_command_index = 0;
             }
             KeyCode::Esc => {
                 self.input.clear();
                 self.history_index = None;
+                self.slash_command_index = 0;
+            }
+            KeyCode::Up if self.has_slash_command_suggestions() => {
+                self.select_previous_slash_command();
+            }
+            KeyCode::Down if self.has_slash_command_suggestions() => {
+                self.select_next_slash_command();
             }
             KeyCode::Up => self.previous_input(),
             KeyCode::Down => self.next_input(),
@@ -262,6 +341,7 @@ impl App {
             {
                 self.input.push(character);
                 self.history_index = None;
+                self.slash_command_index = 0;
             }
             _ => {}
         }
@@ -279,6 +359,7 @@ impl App {
                 self.focus = Focus::Input;
                 if key.code == KeyCode::Char('/') {
                     self.input.push('/');
+                    self.slash_command_index = 0;
                 }
             }
             _ => {}
@@ -347,9 +428,11 @@ impl App {
     }
 
     fn submit_input(&mut self) {
+        self.complete_slash_command_prefix();
         let command = self.input.trim().to_string();
         self.input.clear();
         self.history_index = None;
+        self.slash_command_index = 0;
         if command.is_empty() {
             return;
         }
@@ -367,21 +450,27 @@ impl App {
             return;
         }
         match lower.as_str() {
-            "新局" | "新棋" | "new" | "/new" => self.new_game(),
-            "悔棋" | "undo" | "/undo" => self.undo_for_human(),
-            "提示" | "hint" | "/hint" => self.start_search(SearchPurpose::Hint, self.think_time),
-            "分析" | "analyze" | "/analyze" => {
+            "新局" | "新棋" | "/新局" | "new" | "/new" => self.new_game(),
+            "悔棋" | "/悔棋" | "undo" | "/undo" => self.undo_for_human(),
+            "提示" | "/提示" | "hint" | "/hint" => {
+                self.start_search(SearchPurpose::Hint, self.think_time);
+            }
+            "分析" | "/分析" | "analyze" | "/analyze" => {
                 self.start_search(SearchPurpose::Hint, self.think_time.saturating_mul(3));
             }
-            "停止" | "stop" | "/stop" => self.cancel_search("已停止思考"),
-            "翻转" | "rotate" | "/rotate" => {
+            "停止" | "/停止" | "stop" | "/stop" => self.cancel_search("已停止思考"),
+            "翻转" | "/翻转" | "rotate" | "/rotate" => {
                 self.flipped = !self.flipped;
                 self.message = "棋盘已翻转".to_string();
             }
-            "执红" | "红方" | "/red" => self.set_human_mode(HumanMode::Side(Color::Red)),
-            "执黑" | "黑方" | "/black" => self.set_human_mode(HumanMode::Side(Color::Black)),
-            "双人" | "/both" => self.set_human_mode(HumanMode::Both),
-            "中文棋子" | "/text" => {
+            "执红" | "红方" | "/执红" | "/red" => {
+                self.set_human_mode(HumanMode::Side(Color::Red));
+            }
+            "执黑" | "黑方" | "/执黑" | "/black" => {
+                self.set_human_mode(HumanMode::Side(Color::Black));
+            }
+            "双人" | "/双人" | "/both" => self.set_human_mode(HumanMode::Both),
+            "中文棋子" | "/中文棋子" | "/text" => {
                 self.emoji_pieces = false;
                 self.message = "已切换为中文棋子".to_string();
             }
@@ -389,10 +478,10 @@ impl App {
                 self.emoji_pieces = true;
                 self.message = "已切换为 Unicode 象棋棋子".to_string();
             }
-            "帮助" | "help" | "/help" => {
-                self.message = "着法示例 马二进三；命令 新局 悔棋 提示 分析 停止 翻转 执红 执黑 双人 难度1-20 退出".to_string();
+            "帮助" | "/帮助" | "help" | "/help" => {
+                self.message = "着法示例 马二进三；输入 / 可选择命令；命令 新局 悔棋 提示 分析 停止 翻转 执红 执黑 双人 难度1-20 退出".to_string();
             }
-            "退出" | "quit" | "exit" | "/quit" | "/exit" => self.quit = true,
+            "退出" | "/退出" | "quit" | "exit" | "/quit" | "/exit" => self.quit = true,
             _ if lower.starts_with("fen:") || lower.starts_with("fen：") => {
                 let fen = command
                     .split_once([':', '：'])
@@ -815,6 +904,63 @@ impl App {
         Some(candidates[index].0)
     }
 
+    pub(crate) fn slash_command_suggestions(&self) -> Vec<&'static SlashCommand> {
+        let input = self.input.trim_start();
+        let Some(prefix) = input
+            .split_whitespace()
+            .next()
+            .filter(|value| value.starts_with('/'))
+        else {
+            return Vec::new();
+        };
+        SLASH_COMMANDS
+            .iter()
+            .filter(|command| command.command.starts_with(prefix))
+            .collect()
+    }
+
+    pub(crate) const fn slash_command_index(&self) -> usize {
+        self.slash_command_index
+    }
+
+    fn has_slash_command_suggestions(&self) -> bool {
+        !self.slash_command_suggestions().is_empty()
+    }
+
+    fn select_previous_slash_command(&mut self) {
+        let count = self.slash_command_suggestions().len();
+        if count == 0 {
+            return;
+        }
+        self.slash_command_index = if self.slash_command_index == 0 {
+            count - 1
+        } else {
+            self.slash_command_index.min(count - 1) - 1
+        };
+    }
+
+    fn select_next_slash_command(&mut self) {
+        let count = self.slash_command_suggestions().len();
+        if count == 0 {
+            return;
+        }
+        self.slash_command_index = (self.slash_command_index + 1) % count;
+    }
+
+    fn complete_slash_command_prefix(&mut self) {
+        let input = self.input.trim();
+        if input.chars().any(char::is_whitespace) {
+            return;
+        }
+        let command = self
+            .slash_command_suggestions()
+            .get(self.slash_command_index)
+            .map(|suggestion| suggestion.command);
+        if let Some(command) = command {
+            self.input = command.to_string();
+        }
+    }
+
     fn previous_input(&mut self) {
         if self.input_history.is_empty() {
             return;
@@ -844,6 +990,7 @@ impl App {
 fn difficulty_argument(command: &str) -> Option<&str> {
     command
         .strip_prefix("难度")
+        .or_else(|| command.strip_prefix("/难度"))
         .or_else(|| command.strip_prefix("/difficulty"))
         .or_else(|| command.strip_prefix("difficulty"))
 }
@@ -1032,6 +1179,23 @@ mod tests {
         app.execute_command("/difficulty 20");
         assert!(app.difficulty.is_full_strength());
         assert_eq!(app.message, "AI 难度已设为 20（不限棋力）");
+    }
+
+    #[test]
+    fn slash_menu_filters_and_executes_chinese_commands() {
+        let mut app = App::new(AppOptions::default());
+        app.input = "/".to_string();
+        let commands = app
+            .slash_command_suggestions()
+            .iter()
+            .map(|suggestion| suggestion.command)
+            .collect::<Vec<_>>();
+        assert!(commands.starts_with(&["/难度", "/悔棋", "/提示"]));
+
+        app.input = "/翻".to_string();
+        assert_eq!(app.slash_command_suggestions()[0].command, "/翻转");
+        app.submit_input();
+        assert!(app.flipped);
     }
 
     #[test]
