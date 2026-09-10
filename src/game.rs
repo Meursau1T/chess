@@ -6,7 +6,17 @@ use crate::notation;
 pub struct MoveRecord {
     pub mv: Move,
     pub notation: String,
+    pub capture: Option<String>,
     pub side: Color,
+}
+
+impl MoveRecord {
+    pub fn description(&self) -> String {
+        match &self.capture {
+            Some(capture) => format!("{}，{capture}", self.notation),
+            None => self.notation.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,10 +91,16 @@ impl Game {
     pub fn play(&mut self, mv: Move) -> anyhow::Result<MoveRecord> {
         let side = self.side_to_move();
         let notation = notation::format_move(self.position(), mv);
+        let capture = notation::format_capture(self.position(), mv);
         if !self.rules.make_move(mv) {
             anyhow::bail!("这步棋不合法");
         }
-        let record = MoveRecord { mv, notation, side };
+        let record = MoveRecord {
+            mv,
+            notation,
+            capture,
+            side,
+        };
         self.records.push(record.clone());
         Ok(record)
     }
@@ -155,5 +171,15 @@ mod tests {
         assert_eq!(game.side_to_move(), Color::Black);
         game.undo().unwrap();
         assert_eq!(game.fen(), before);
+    }
+
+    #[test]
+    fn capture_record_includes_a_plain_language_description() {
+        let mut game = Game::new();
+        game.set_fen("4k4/9/9/9/4P4/9/n8/9/9/R3K4 w - - 0 1")
+            .unwrap();
+        let record = game.play(Move::from_iccs("a0a3").unwrap()).unwrap();
+        assert_eq!(record.capture.as_deref(), Some("车吃黑马"));
+        assert_eq!(record.description(), "车九进三，车吃黑马");
     }
 }

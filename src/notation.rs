@@ -114,6 +114,25 @@ pub fn format_move(position: &Position, mv: Move) -> String {
     format_move_on(&BoardSnapshot::from_position(position), mv)
 }
 
+pub fn format_capture(position: &Position, mv: Move) -> Option<String> {
+    let attacker = position.piece_at(mv.src())?;
+    let captured = position.piece_at(mv.dst())?;
+    let action = if attacker.kind() == PieceType::Cannon {
+        "打"
+    } else {
+        "吃"
+    };
+    let captured_side = match captured.color() {
+        Color::Red => "红",
+        Color::Black => "黑",
+    };
+    Some(format!(
+        "{}{action}{captured_side}{}",
+        piece_name(attacker),
+        piece_name(captured)
+    ))
+}
+
 pub fn format_pv(position: &Position, moves: &[Move], max_plies: usize) -> String {
     let mut board = BoardSnapshot::from_position(position);
     let mut result = Vec::new();
@@ -384,5 +403,29 @@ mod tests {
     fn normalization_accepts_piece_aliases() {
         assert_eq!(normalize_notation(" 俥九進一 "), "车9进1");
         assert_eq!(normalize_notation("砲２平５"), "炮2平5");
+    }
+
+    #[test]
+    fn describes_cannon_and_regular_captures() {
+        let mut engine = start();
+        engine
+            .set_fen("4k4/9/9/9/4P4/9/c8/p8/9/R3K4 b - - 0 1")
+            .unwrap();
+        assert_eq!(
+            format_capture(engine.position(), Move::from_iccs("a3a0").unwrap()).as_deref(),
+            Some("炮打红车")
+        );
+
+        engine
+            .set_fen("4k4/9/9/9/4P4/9/n8/9/9/R3K4 w - - 0 1")
+            .unwrap();
+        assert_eq!(
+            format_capture(engine.position(), Move::from_iccs("a0a3").unwrap()).as_deref(),
+            Some("车吃黑马")
+        );
+        assert_eq!(
+            format_capture(engine.position(), Move::from_iccs("a0a1").unwrap()),
+            None
+        );
     }
 }

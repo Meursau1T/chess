@@ -610,13 +610,13 @@ impl App {
                 self.clear_selection();
                 self.hint_move = None;
                 self.analysis_lines.clear();
-                self.after_move(record.notation);
+                self.after_move(record.description());
             }
             Err(error) => self.message = error.to_string(),
         }
     }
 
-    fn after_move(&mut self, notation: String) {
+    fn after_move(&mut self, description: String) {
         match self.game.state() {
             PositionState::Won {
                 winner,
@@ -625,18 +625,18 @@ impl App {
                 let mate_red = if winner == Color::Red { 1 } else { -1 };
                 self.update_position_evaluation(self.game.history().len(), 0, None, Some(mate_red));
                 self.message = format!(
-                    "{}，{}获胜",
+                    "{description}，{}，{}获胜",
                     if by_checkmate { "将死" } else { "困毙" },
                     color_name(winner)
                 );
                 self.thinking = false;
             }
             PositionState::Check(side) => {
-                self.message = format!("{notation}，{}被将军", color_name(side));
+                self.message = format!("{description}，{}被将军", color_name(side));
                 self.schedule_next_search();
             }
             PositionState::Playing => {
-                self.message = notation;
+                self.message = description;
                 self.schedule_next_search();
             }
         }
@@ -867,7 +867,7 @@ impl App {
                             self.clear_selection();
                             self.hint_move = None;
                             self.analysis_lines.clear();
-                            self.after_move(format!("电脑走 {}", record.notation));
+                            self.after_move(format!("电脑走 {}", record.description()));
                         }
                     }
                     SearchPurpose::Evaluation => {}
@@ -1139,6 +1139,19 @@ mod tests {
         }
         assert_eq!(app.game.history().len(), 2);
         assert_eq!(app.game.side_to_move(), Color::Red);
+    }
+
+    #[test]
+    fn move_message_mentions_the_captured_piece() {
+        let mut app = App::new(AppOptions::default());
+        app.human_mode = HumanMode::Both;
+        app.game
+            .set_fen("4k4/9/9/9/4P4/9/n8/9/9/R3K4 w - - 0 1")
+            .unwrap();
+
+        app.play_move(Move::from_iccs("a0a3").unwrap());
+
+        assert_eq!(app.message, "车九进三，车吃黑马");
     }
 
     #[test]
