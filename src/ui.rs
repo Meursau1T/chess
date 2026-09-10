@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{AnalysisLine, App, Focus, PositionEvaluation};
+use crate::app::{AnalysisLine, App, BoardStyle, Focus, PositionEvaluation};
 use crate::game::{PositionState, color_name};
 
 const BOARD_WIDTH: u16 = 42;
@@ -422,80 +422,165 @@ impl Widget for BoardWidget<'_> {
         } else {
             Color::DarkGray
         };
+        let title = format!(
+            " 棋盘 · {} · V 样式 · Tab 焦点 ",
+            self.app.board_style.label()
+        );
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" 棋盘 · Tab 切换焦点 ")
+            .title(title)
             .border_style(Style::default().fg(border_color));
         let inner = block.inner(area);
         block.render(area, buffer);
-        if inner.height < 12 || inner.width < 37 {
-            buffer.set_string(
-                inner.x,
-                inner.y,
-                "棋盘区域太小",
-                Style::default().fg(Color::Yellow),
-            );
-            return;
+
+        match self.app.board_style {
+            BoardStyle::Lines => render_line_board(buffer, inner, self.app),
+            BoardStyle::Compact => render_compact_board(buffer, inner, self.app),
         }
+    }
+}
 
-        let content_width = 38u16;
-        let origin_x = inner.x + inner.width.saturating_sub(content_width) / 2;
-        let origin_y = inner.y + inner.height.saturating_sub(12) / 2;
+fn render_compact_board(buffer: &mut Buffer, area: Rect, app: &App) {
+    if area.height < 12 || area.width < 37 {
+        buffer.set_string(
+            area.x,
+            area.y,
+            "棋盘区域太小",
+            Style::default().fg(Color::Yellow),
+        );
+        return;
+    }
 
-        let top_side = if self.app.flipped {
-            SideColor::Red
-        } else {
-            SideColor::Black
-        };
+    let content_width = 38u16;
+    let origin_x = area.x + area.width.saturating_sub(content_width) / 2;
+    let origin_y = area.y + area.height.saturating_sub(12) / 2;
+    render_file_labels(buffer, origin_x, origin_y, app, true);
+
+    for display_row in 0..10u8 {
+        let rank = display_rank(app, display_row);
+        let y = origin_y + 1 + display_row as u16;
+        buffer.set_string(
+            origin_x,
+            y,
+            rank.to_string(),
+            Style::default().fg(Color::DarkGray),
+        );
         for display_column in 0..9u8 {
+            let square = display_square(app, display_row, display_column);
             let x = origin_x + 3 + display_column as u16 * 4;
-            buffer.set_string(
-                x,
-                origin_y,
-                file_label(top_side, display_column + 1),
-                Style::default().fg(Color::DarkGray),
-            );
+            render_square(buffer, x, y, square, app, "·");
         }
+    }
 
-        for display_row in 0..10u8 {
-            let rank = if self.app.flipped {
-                display_row
-            } else {
-                9 - display_row
-            };
-            let y = origin_y + 1 + display_row as u16;
-            buffer.set_string(
-                origin_x,
-                y,
-                rank.to_string(),
-                Style::default().fg(Color::DarkGray),
-            );
-            for display_column in 0..9u8 {
-                let file = if self.app.flipped {
-                    8 - display_column
-                } else {
-                    display_column
-                };
-                let square = Square::from_rank_file(rank, file).expect("valid board square");
-                let x = origin_x + 3 + display_column as u16 * 4;
-                render_square(buffer, x, y, square, self.app);
+    render_file_labels(buffer, origin_x, origin_y + 11, app, false);
+}
+
+fn render_line_board(buffer: &mut Buffer, area: Rect, app: &App) {
+    const CONTENT_HEIGHT: u16 = 12;
+    if area.height < CONTENT_HEIGHT || area.width < 37 {
+        buffer.set_string(
+            area.x,
+            area.y,
+            "棋盘区域太小",
+            Style::default().fg(Color::Yellow),
+        );
+        return;
+    }
+
+    let content_width = 38u16;
+    let origin_x = area.x + area.width.saturating_sub(content_width) / 2;
+    let origin_y = area.y + area.height.saturating_sub(CONTENT_HEIGHT) / 2;
+    let grid_x = origin_x + 3;
+    let grid_style = Style::default().fg(Color::DarkGray);
+
+    render_file_labels(buffer, origin_x, origin_y, app, true);
+
+    for display_row in 0..10u8 {
+        let rank = display_rank(app, display_row);
+        let y = origin_y + 1 + display_row as u16;
+        buffer.set_string(origin_x, y, rank.to_string(), grid_style);
+        for display_column in 0..9u8 {
+            let x = grid_x + display_column as u16 * 4;
+            buffer.set_string(x, y, line_junction(display_row, display_column), grid_style);
+            if display_column < 8 {
+                buffer.set_string(x + 1, y, "───", grid_style);
             }
         }
+    }
 
-        let bottom_side = if self.app.flipped {
-            SideColor::Black
-        } else {
-            SideColor::Red
-        };
+    for display_row in 0..10u8 {
+        let y = origin_y + 1 + display_row as u16;
         for display_column in 0..9u8 {
-            let x = origin_x + 3 + display_column as u16 * 4;
-            buffer.set_string(
+            let square = display_square(app, display_row, display_column);
+            let x = grid_x + display_column as u16 * 4;
+            render_square(
+                buffer,
                 x,
-                origin_y + 11,
-                file_label(bottom_side, 9 - display_column),
-                Style::default().fg(Color::DarkGray),
+                y,
+                square,
+                app,
+                line_junction(display_row, display_column),
             );
         }
+    }
+
+    render_file_labels(buffer, origin_x, origin_y + 11, app, false);
+}
+
+fn render_file_labels(buffer: &mut Buffer, origin_x: u16, y: u16, app: &App, top: bool) {
+    let side = match (top, app.flipped) {
+        (true, false) | (false, true) => SideColor::Black,
+        (true, true) | (false, false) => SideColor::Red,
+    };
+    for display_column in 0..9u8 {
+        let number = if top {
+            display_column + 1
+        } else {
+            9 - display_column
+        };
+        let x = origin_x + 3 + display_column as u16 * 4;
+        buffer.set_string(
+            x,
+            y,
+            file_label(side, number),
+            Style::default().fg(Color::DarkGray),
+        );
+    }
+}
+
+fn display_rank(app: &App, display_row: u8) -> u8 {
+    if app.flipped {
+        display_row
+    } else {
+        9 - display_row
+    }
+}
+
+fn display_square(app: &App, display_row: u8, display_column: u8) -> Square {
+    let rank = display_rank(app, display_row);
+    let file = if app.flipped {
+        8 - display_column
+    } else {
+        display_column
+    };
+    Square::from_rank_file(rank, file).expect("valid board square")
+}
+
+fn line_junction(display_row: u8, display_column: u8) -> &'static str {
+    match (display_row, display_column) {
+        (0, 0) => "┌",
+        (0, 8) => "┐",
+        (0, _) => "┬",
+        (9, 0) => "└",
+        (9, 8) => "┘",
+        (9, _) => "┴",
+        (4, 0) | (5, 0) => "├",
+        (4, 8) | (5, 8) => "┤",
+        (4, _) => "┴",
+        (5, _) => "┬",
+        (_, 0) => "├",
+        (_, 8) => "┤",
+        _ => "┼",
     }
 }
 
@@ -507,7 +592,14 @@ fn file_label(side: SideColor, number: u8) -> &'static str {
     }
 }
 
-fn render_square(buffer: &mut Buffer, x: u16, y: u16, square: Square, app: &App) {
+fn render_square(
+    buffer: &mut Buffer,
+    x: u16,
+    y: u16,
+    square: Square,
+    app: &App,
+    empty_symbol: &'static str,
+) {
     let piece = app.game.piece_at(square);
     let is_legal_target = app.selected_moves.iter().any(|mv| mv.dst() == square);
     let mut style = match piece.map(|piece| piece.color()) {
@@ -545,7 +637,7 @@ fn render_square(buffer: &mut Buffer, x: u16, y: u16, square: Square, app: &App)
 
     let symbol = piece
         .map(|piece| piece_symbol(piece, app.emoji_pieces))
-        .unwrap_or("·");
+        .unwrap_or(if is_legal_target { "·" } else { empty_symbol });
     buffer.set_string(x, y, symbol, style);
 }
 
@@ -632,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn full_layout_contains_text_pieces_dots_and_analysis_panel() {
+    fn full_layout_contains_line_board_and_analysis_panel() {
         let app = App::new(AppOptions::default());
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -645,8 +737,41 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(symbols.contains('帅'));
-        assert!(symbols.contains('·'));
+        assert!(symbols.contains('─'));
+        assert!(symbols.contains('┼'));
+        assert!(!symbols.contains('小'));
         assert!(symbols.contains("AI"));
+    }
+
+    #[test]
+    fn line_board_fits_the_original_minimum_terminal_size() {
+        let app = App::new(AppOptions::default());
+        let backend = TestBackend::new(39, 19);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let symbols = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(symbols.contains('帅'));
+        assert!(symbols.contains('─'));
+        assert!(!symbols.contains('小'));
+    }
+
+    #[test]
+    fn compact_board_keeps_dot_intersections() {
+        let mut app = App::new(AppOptions::default());
+        app.board_style = BoardStyle::Compact;
+        let backend = TestBackend::new(42, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| frame.render_widget(BoardWidget { app: &app }, frame.area()))
+            .unwrap();
+        let cells = terminal.backend().buffer().content();
+        assert_eq!(cells[3 * 42 + 5].symbol(), "·");
     }
 
     #[test]

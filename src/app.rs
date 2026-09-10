@@ -17,6 +17,21 @@ pub enum Focus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardStyle {
+    Lines,
+    Compact,
+}
+
+impl BoardStyle {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Lines => "线条",
+            Self::Compact => "简洁",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HumanMode {
     Side(Color),
     Both,
@@ -122,7 +137,7 @@ pub(crate) struct SlashCommand {
     pub(crate) description: &'static str,
 }
 
-const SLASH_COMMANDS: [SlashCommand; 14] = [
+const SLASH_COMMANDS: [SlashCommand; 15] = [
     SlashCommand {
         command: "/难度",
         description: "查看或设置 1 到 20 级",
@@ -150,6 +165,10 @@ const SLASH_COMMANDS: [SlashCommand; 14] = [
     SlashCommand {
         command: "/翻转",
         description: "翻转棋盘",
+    },
+    SlashCommand {
+        command: "/棋盘",
+        description: "切换线条和简洁样式",
     },
     SlashCommand {
         command: "/执红",
@@ -207,6 +226,7 @@ pub struct App {
     pub(crate) selected: Option<Square>,
     pub(crate) selected_moves: Vec<Move>,
     pub(crate) flipped: bool,
+    pub(crate) board_style: BoardStyle,
     pub(crate) message: String,
     pub(crate) human_mode: HumanMode,
     pub(crate) thinking: bool,
@@ -238,7 +258,8 @@ impl App {
             selected: None,
             selected_moves: Vec::new(),
             flipped: false,
-            message: "输入 马二进三 后按 Enter，Tab 可查看棋盘走法".to_string(),
+            board_style: BoardStyle::Lines,
+            message: "输入 马二进三 后按 Enter；Tab 操作棋盘，V 切换样式".to_string(),
             human_mode: HumanMode::Side(Color::Red),
             thinking: false,
             engine_name: "正在启动引擎".to_string(),
@@ -354,6 +375,7 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.move_cursor(-1, 0),
             KeyCode::Right | KeyCode::Char('l') => self.move_cursor(1, 0),
             KeyCode::Enter | KeyCode::Char(' ') => self.activate_board_square(),
+            KeyCode::Char('v') | KeyCode::Char('V') => self.toggle_board_style(),
             KeyCode::Esc => self.clear_selection(),
             KeyCode::Char(':') | KeyCode::Char('/') => {
                 self.focus = Focus::Input;
@@ -463,6 +485,9 @@ impl App {
                 self.flipped = !self.flipped;
                 self.message = "棋盘已翻转".to_string();
             }
+            "棋盘" | "切换棋盘" | "/棋盘" | "board" | "/board" => {
+                self.toggle_board_style();
+            }
             "执红" | "红方" | "/执红" | "/red" => {
                 self.set_human_mode(HumanMode::Side(Color::Red));
             }
@@ -479,7 +504,7 @@ impl App {
                 self.message = "已切换为 Unicode 象棋棋子".to_string();
             }
             "帮助" | "/帮助" | "help" | "/help" => {
-                self.message = "着法示例 马二进三；输入 / 可选择命令；命令 新局 悔棋 提示 分析 停止 翻转 执红 执黑 双人 难度1-20 退出".to_string();
+                self.message = "着法示例 马二进三；输入 / 可选择命令；命令 新局 悔棋 提示 分析 停止 翻转 棋盘 执红 执黑 双人 难度1-20 退出".to_string();
             }
             "退出" | "/退出" | "quit" | "exit" | "/quit" | "/exit" => self.quit = true,
             _ if lower.starts_with("fen:") || lower.starts_with("fen：") => {
@@ -491,6 +516,14 @@ impl App {
             }
             _ => self.play_notation(command),
         }
+    }
+
+    fn toggle_board_style(&mut self) {
+        self.board_style = match self.board_style {
+            BoardStyle::Lines => BoardStyle::Compact,
+            BoardStyle::Compact => BoardStyle::Lines,
+        };
+        self.message = format!("已切换为{}棋盘", self.board_style.label());
     }
 
     fn handle_difficulty_command(&mut self, argument: &str) {
@@ -1191,11 +1224,26 @@ mod tests {
             .map(|suggestion| suggestion.command)
             .collect::<Vec<_>>();
         assert!(commands.starts_with(&["/难度", "/悔棋", "/提示"]));
+        assert!(commands.contains(&"/棋盘"));
 
         app.input = "/翻".to_string();
         assert_eq!(app.slash_command_suggestions()[0].command, "/翻转");
         app.submit_input();
         assert!(app.flipped);
+    }
+
+    #[test]
+    fn board_command_toggles_between_line_and_compact_styles() {
+        let mut app = App::new(AppOptions::default());
+        assert_eq!(app.board_style, BoardStyle::Lines);
+
+        app.execute_command("棋盘");
+        assert_eq!(app.board_style, BoardStyle::Compact);
+        assert_eq!(app.message, "已切换为简洁棋盘");
+
+        app.execute_command("/board");
+        assert_eq!(app.board_style, BoardStyle::Lines);
+        assert_eq!(app.message, "已切换为线条棋盘");
     }
 
     #[test]
